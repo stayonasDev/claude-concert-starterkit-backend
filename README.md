@@ -53,6 +53,24 @@ docker compose up -d         # MySQL(3307) + Redis(6379) + backend(8080) 전체 
 
 컨테이너 없이 호스트에서 직접 실행하려면 `docker compose up -d mysql redis`로 DB만 띄운 뒤 `./gradlew bootRun`(Windows는 `gradlew.bat bootRun`).
 
+### .env 작성 가이드
+
+`.env.example`을 복사해 아래 변수 값을 채운다 (형식: `변수명=값`).
+
+```
+MYSQL_DATABASE=starterkit
+MYSQL_USER=starterkit
+MYSQL_PASSWORD=starterkit
+MYSQL_ROOT_PASSWORD=root
+MYSQL_HOST_PORT=3307
+REDIS_HOST_PORT=6379
+APP_HOST_PORT=8080
+APP_JWT_SECRET=<32바이트 이상 임의 문자열>
+APP_JWT_VALIDITY_MS=3600000
+```
+
+`.env`는 git-ignore 대상이며, 값을 채우지 않아도 `application.yaml`의 기본값으로 동작한다(`./gradlew build`/`test` 시).
+
 ### 테스트
 
 ```bash
