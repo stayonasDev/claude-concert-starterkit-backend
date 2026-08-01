@@ -39,10 +39,11 @@ public record ConcertDetailResponse(
         );
     }
 
-    public record SeatGradeResponse(String gradeName, BigDecimal price, Integer totalCount) {
+    public record SeatGradeResponse(Long id, String gradeName, BigDecimal price, Integer totalCount) {
 
         public static SeatGradeResponse from(SeatGrade seatGrade) {
-            return new SeatGradeResponse(seatGrade.getGradeName(), seatGrade.getPrice(), seatGrade.getTotalCount());
+            return new SeatGradeResponse(
+                    seatGrade.getId(), seatGrade.getGradeName(), seatGrade.getPrice(), seatGrade.getTotalCount());
         }
     }
 }
