@@ -1,0 +1,10 @@
+.git
+.gitattributes
+.gitignore
+.idea
+.gradle
+build
+docs
+*.md
+.env
+.env.example

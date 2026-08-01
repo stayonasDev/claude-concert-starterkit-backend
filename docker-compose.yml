@@ -1,0 +1,65 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: starterkit-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      # 호스트에 이미 로컬 MySQL(3306)이 떠 있는 경우를 피하기 위해 호스트 쪽 포트를 3307로 매핑한다.
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    volumes:
+      # 데이터 영속화: 컨테이너를 내렸다 올려도 데이터가 유지된다.
+      - mysql-data:/var/lib/mysql
+      # docs/database-schema.sql은 MySQL 공식 이미지의 초기화 규약(docker-entrypoint-initdb.d)에 따라
+      # 데이터 디렉터리가 비어있는 최초 기동 시 1회만 자동 실행된다 (volume이 이미 있으면 재실행되지 않음).
+      - ./docs/database-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: starterkit-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: starterkit-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # 컨테이너 네트워크 내부에서는 호스트 매핑 포트(3307 등)가 아니라 서비스명 + 내부 포트로 접속한다.
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      APP_JWT_SECRET: ${APP_JWT_SECRET}
+      APP_JWT_VALIDITY_MS: ${APP_JWT_VALIDITY_MS:-3600000}
+    ports:
+      - "${APP_HOST_PORT:-8080}:8080"
+
+volumes:
+  mysql-data:
+  redis-data:
