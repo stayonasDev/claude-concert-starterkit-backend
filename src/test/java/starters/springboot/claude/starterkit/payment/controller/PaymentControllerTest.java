@@ -14,6 +14,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 import starters.springboot.claude.starterkit.common.lock.LockStrategyType;
 import starters.springboot.claude.starterkit.concert.domain.Concert;
@@ -83,6 +84,14 @@ class PaymentControllerTest extends ContainerTestSupport {
         ReservationResult result = reservationFacade.reserve(new ReserveSeatsCommand(
                 1L, concert.getId(), List.of(seatId), LockStrategyType.REDIS));
         this.reservationId = result.reservationId();
+
+        // 결제 실패 시 PaymentFailureService가 REQUIRES_NEW로 별도 트랜잭션에 즉시 커밋하는데,
+        // 이 테스트는 클래스 레벨 @Transactional로 setUp()까지 하나의(아직 커밋 안 된) 트랜잭션
+        // 안에서 실행된다. 여기서 커밋해 실제 운영(좌석 선점과 결제가 서로 다른 HTTP 요청)과
+        // 같은 조건을 만든다.
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+        TestTransaction.start();
     }
 
     @Test

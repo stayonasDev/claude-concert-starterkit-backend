@@ -9,6 +9,7 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 import starters.springboot.claude.starterkit.common.exception.BusinessException;
 import starters.springboot.claude.starterkit.common.exception.ErrorCode;
@@ -122,10 +123,27 @@ class PaymentServiceTest extends ContainerTestSupport {
     void 결제_실패시_예약이_취소되고_좌석이_반환된다() {
         Long reservationId = createHoldingReservation(1L);
 
+        // PaymentFailureService가 REQUIRES_NEW로 별도 트랜잭션을 열어 즉시 커밋하는데, 이
+        // 테스트는 클래스 레벨 @Transactional로 전체가 하나의(아직 커밋 안 된) 트랜잭션 안에서
+        // 실행된다. REQUIRES_NEW 트랜잭션은 격리 원칙상 아직 커밋 안 된 위 예약 데이터를 볼 수
+        // 없으므로, 여기서 명시적으로 커밋해 실제 운영(서로 다른 HTTP 요청)과 같은 조건을 만든다.
+        // 새로 시작한 트랜잭션은 테스트 종료 시 여전히 롤백되지만, REQUIRES_NEW로 커밋된 결제
+        // 실패 기록/취소된 예약/반환된 좌석 자체는 테스트 종료 후에도 남는다 — @BeforeEach가
+        // 매번 새 concert/seat를 만들어 PK가 겹치지 않으므로 다른 테스트에 영향은 없다.
+        TestTransaction.flagForCommit();
+        TestTransaction.end();
+        TestTransaction.start();
+
         BusinessException exception = assertThrows(BusinessException.class,
                 () -> paymentService.pay(new PaymentCommand(reservationId, PaymentMethod.MOCK, true)));
 
         assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.PAYMENT_FAILED);
+
+        // pay() 안에서 이미 이 persistence context에 reservation을 (변경 전 상태로) 로드해뒀기
+        // 때문에, 같은 컨텍스트에서 다시 조회하면 REQUIRES_NEW로 커밋된 최신 상태가 아니라 그
+        // 캐시를 그대로 돌려받는다. 트랜잭션을 새로 시작해 fresh하게 조회한다.
+        TestTransaction.end();
+        TestTransaction.start();
 
         Reservation reservation = reservationRepository.findById(reservationId).orElseThrow();
         assertThat(reservation.getStatus()).isEqualTo(ReservationStatus.CANCELLED);

@@ -36,6 +36,7 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final MockPgClient mockPgClient;
     private final TicketService ticketService;
+    private final PaymentFailureService paymentFailureService;
 
     @Transactional
     public PaymentResult pay(PaymentCommand command) {
@@ -54,7 +55,10 @@ public class PaymentService {
         PgChargeResult chargeResult = mockPgClient.charge(amount, command.forceFail());
 
         if (!chargeResult.success()) {
-            handlePaymentFailure(reservation, payment);
+            // 별도 트랜잭션(REQUIRES_NEW)에서 즉시 커밋 — 아래 예외로 이 메서드의 트랜잭션이
+            // 롤백되더라도 방금 반환한 좌석/취소한 예약은 그대로 유지된다. 엔티티가 아니라
+            // id/원시값만 넘겨서 그 트랜잭션 안에서 새로 조회하게 한다(PaymentFailureService 참고).
+            paymentFailureService.recordFailureAndReleaseSeats(reservation.getId(), amount, command.method());
             throw new BusinessException(ErrorCode.PAYMENT_FAILED);
         }
 
@@ -76,14 +80,6 @@ public class PaymentService {
         return reservation.getReservationSeats().stream()
                 .map(ReservationSeat::getPriceSnapshot)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
-    // FR-16: 결제 실패 시 좌석을 즉시 반환해 재선점 가능하게 한다.
-    private void handlePaymentFailure(Reservation reservation, Payment payment) {
-        payment.markFailed();
-        savePayment(payment);
-        reservation.cancel();
-        releaseSeats(reservation);
     }
 
     // FR-15: Payment/Reservation/Seat/Ticket 반영을 하나의 트랜잭션으로 처리한다.
@@ -113,11 +109,6 @@ public class PaymentService {
     private void confirmSeats(Reservation reservation) {
         reservation.getReservationSeats().forEach(reservationSeat ->
                 seatRepository.findById(reservationSeat.getSeatId()).ifPresent(Seat::confirm));
-    }
-
-    private void releaseSeats(Reservation reservation) {
-        reservation.getReservationSeats().forEach(reservationSeat ->
-                seatRepository.findById(reservationSeat.getSeatId()).ifPresent(Seat::release));
     }
 
     // FR-20: 잔여 판매 가능 좌석이 없으면 콘서트를 SOLD_OUT으로 자동 전환한다.
