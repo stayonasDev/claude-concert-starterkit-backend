@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: JDK 17 설정
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle 캐시 설정
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: gradlew 실행 권한 부여
+        run: chmod +x gradlew
+
+      - name: 빌드 (테스트 제외)
+        run: ./gradlew build -x test
+
+      # 테스트는 TestContainers로 MySQL/Redis 컨테이너를 직접 기동하므로
+      # 별도의 services: 블록 없이 Docker-in-Docker가 가능한 ubuntu-latest 러너에서 바로 실행된다.
+      - name: 테스트 실행 (TestContainers 기반 통합/동시성 테스트 포함)
+        run: ./gradlew test
+
+      - name: 테스트 리포트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: build/reports/tests/test
+          retention-days: 7

@@ -1,0 +1,62 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.0.7'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'starters.springboot.claude'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(17)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+// Spring Boot의 dependency-management BOM이 Testcontainers 버전을 관리하지 않으므로
+// 별도로 BOM을 임포트하여 testcontainers 계열 모듈 버전을 일치시킨다.
+dependencyManagement {
+	imports {
+		mavenBom "org.testcontainers:testcontainers-bom:1.21.3"
+	}
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	implementation 'org.springframework.boot:spring-boot-starter-security'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.2'
+	// docs/tech-decisions.md D-2: 좌석 선점 Redis 분산락 전략에 사용 (Redisson RLock)
+	// redisson-spring-boot-starter는 아직 Spring Boot 4의 리패키징된 자동설정 클래스
+	// (org.springframework.boot.data.redis.autoconfigure.*)와 호환되지 않아 ClassNotFoundException을
+	// 일으키므로, 자동설정이 없는 순수 코어 라이브러리만 사용하고 RedissonClient는 RedissonConfig에서 직접 생성한다.
+	implementation 'org.redisson:redisson:3.50.0'
+	// docs/api-spec.md 1.2: JWT 기반 accessToken 발급. jjwt-gson을 사용해 Jackson 2/3 버전
+	// 충돌(docs/tech-decisions.md 환경 참고 항목) 가능성을 원천적으로 피한다.
+	implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+	runtimeOnly 'io.jsonwebtoken:jjwt-gson:0.12.6'
+	compileOnly 'org.projectlombok:lombok'
+	runtimeOnly 'com.mysql:mysql-connector-j'
+	annotationProcessor 'org.projectlombok:lombok'
+	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-data-redis-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	// docs/tech-decisions.md D-4: TestContainers 기반 통합/동시성 테스트 (MySQL + Redis 가상 컨테이너)
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:mysql'
+	testCompileOnly 'org.projectlombok:lombok'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testAnnotationProcessor 'org.projectlombok:lombok'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

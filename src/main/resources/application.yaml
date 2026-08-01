@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: starterkit
+  datasource:
+    # 로컬(호스트에서 bootRun): docker-compose.yml의 mysql 서비스에 3307로 매핑되어 접속한다.
+    # 컨테이너 내부(docker-compose backend 서비스): .env의 SPRING_DATASOURCE_* 값으로 덮어써
+    # 서비스명 기반 주소(mysql:3306)를 사용한다.
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3307/starterkit}
+    username: ${SPRING_DATASOURCE_USERNAME:starterkit}
+    password: ${SPRING_DATASOURCE_PASSWORD:starterkit}
+  jpa:
+    hibernate:
+      # 스키마는 docs/database-schema.sql(docker-compose 초기화 스크립트)이 단일 진실 소스이므로
+      # Hibernate가 스키마를 생성/변경하지 않고 엔티티 매핑이 기존 스키마와 일치하는지만 검증한다.
+      ddl-auto: validate
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+
+app:
+  jwt:
+    # 개발 편의를 위한 기본값이다 — 실제 배포 시 반드시 .env(APP_JWT_SECRET)로 덮어써야 한다.
+    # HS256에는 최소 256비트(32바이트) 키가 필요하다.
+    secret: ${APP_JWT_SECRET:starterkit-local-dev-only-jwt-secret-please-change-in-production-32bytes+}
+    validity-ms: ${APP_JWT_VALIDITY_MS:3600000} # 1시간
