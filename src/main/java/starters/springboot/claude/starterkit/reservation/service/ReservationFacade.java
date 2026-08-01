@@ -109,14 +109,22 @@ public class ReservationFacade {
         return ReservationResult.from(saved);
     }
 
+    // 락 획득 전에 seatRepository.findById로 Seat를 먼저 읽으면, OSIV로 요청 전체가 공유하는
+    // 영속성 컨텍스트(1차 캐시)에 잠금 없이 읽은 엔티티가 캐싱된다. 이후 각 전략 내부에서
+    // 같은 seatId로 findById/findByIdForUpdate를 다시 호출해도 Hibernate가 DB를 재조회하지
+    // 않고 이 캐시된(오래된) 인스턴스를 그대로 반환해, 락을 획득한 뒤에도 status/version이
+    // 최신 상태로 갱신되지 않는다 — 패자 요청이 SEAT_ALREADY_HELD 대신 낙관적 락 충돌
+    // (ObjectOptimisticLockingFailureException, 500)로 떨어지는 원인이었다. 가격 스냅샷에
+    // 필요한 Seat/SeatGrade 조회는 strategy.hold()가 락을 획득하고 상태를 확정한 뒤로 옮겨서
+    // 이 캐시 오염을 없앤다.
     private ReservationSeat holdAndBuildLine(SeatHoldStrategy strategy, Long seatId, Long userId,
                                               LocalDateTime holdExpiresAt) {
+        strategy.hold(seatId, userId, holdExpiresAt);
+
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.SEAT_NOT_FOUND));
         SeatGrade seatGrade = seatGradeRepository.findById(seat.getSeatGradeId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.SEAT_NOT_FOUND));
-
-        strategy.hold(seatId, userId, holdExpiresAt);
 
         return ReservationSeat.builder()
                 .seatId(seatId)
