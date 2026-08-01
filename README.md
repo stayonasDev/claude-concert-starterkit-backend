@@ -220,3 +220,97 @@ public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(Exception e) 
 HOLD 카운트다운이 실제 만료 시각까지 남은 시간을 정확히 보여준다. 이 API를 새로 소비하는 클라이언트가 같은 함정에 빠지지 않도록, 시각 필드는 별도 표기가 없는 한 **UTC 기준**이라는 점을 여기 남겨둔다(추후 응답 DTO를 `Instant`/오프셋 포함 타입으로 바꾸는 것도 고려할 만하다).
 
 </details>
+
+<details>
+<summary><strong>결제 실패 시 좌석 반환/예약 취소가 함께 롤백되던 문제</strong></summary>
+
+#### 문제 상황
+
+프론트엔드에서 결제 실패(`forceFail`) 시뮬레이션을 테스트하는 중, 결제 실패 응답(`PAYMENT_FAILED`)은 정상적으로 받았지만 이후 콘서트 상세 페이지에서 방금 실패한 좌석이 여전히 선택 불가 상태로 남아 있는 것을 발견했다.
+
+#### 원인 분석
+
+`PaymentService.pay()`가 하나의 `@Transactional`로 감싸여 있는데, 결제 실패 시 좌석 반환/예약 취소/실패 기록을 처리한 직후 `BusinessException(PAYMENT_FAILED)`을 던져 컨트롤러까지 전파시켰다.
+
+```java
+// 수정 전
+if (!chargeResult.success()) {
+    handlePaymentFailure(reservation, payment);   // 좌석 반환, 예약 취소, 실패 기록
+    throw new BusinessException(ErrorCode.PAYMENT_FAILED);
+}
+```
+
+Spring의 기본 트랜잭션 정책상 `RuntimeException`이 전파되면 트랜잭션 전체가 롤백된다. `handlePaymentFailure`가 `pay()`와 같은 트랜잭션 안에서 실행됐으므로, 방금 반환한 좌석과 취소한 예약까지 이 롤백에 함께 휩쓸려 사라졌다 — 응답은 결제 실패로 보이지만 DB는 여전히 좌석 `HELD`/예약 `HOLDING` 상태로 남아 재선점이 불가능했다(FR-16 위반).
+
+#### 해결
+
+`PaymentFailureService`를 새로 만들어 결제 실패 시 좌석 반환/예약 취소/실패 기록을 `REQUIRES_NEW`로 별도 트랜잭션에 즉시 커밋하도록 분리했다. 처음엔 `reservation`/`payment` 엔티티를 그대로 넘겨 새 트랜잭션에서 `merge`하는 방식으로 구현했으나, 트랜잭션 경계 너머로 전달된 엔티티를 merge하면 버전 충돌(`StaleObjectStateException`)이 발생해, id/원시값만 넘기고 그 트랜잭션 안에서 새로 조회 → 수정 → 저장까지 전부 끝내도록 다시 설계했다.
+
+```java
+// 수정 후 — PaymentService.pay()
+if (!chargeResult.success()) {
+    paymentFailureService.recordFailureAndReleaseSeats(reservation.getId(), amount, command.method());
+    throw new BusinessException(ErrorCode.PAYMENT_FAILED);
+}
+```
+
+```java
+// PaymentFailureService — 별도 트랜잭션에서 즉시 커밋
+@Component
+@RequiredArgsConstructor
+public class PaymentFailureService {
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordFailureAndReleaseSeats(Long reservationId, BigDecimal amount, PaymentMethod method) {
+        Reservation reservation = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESERVATION_NOT_FOUND));
+        // payment 실패 기록 저장, reservation.cancel() + 저장, 좌석마다 release() + 저장
+    }
+}
+```
+
+#### 결과
+
+Docker로 백엔드를 재기동해 프론트에서 좌석 선택 → 결제 실패 시뮬레이션 → 좌석이 즉시 다시 선택 가능해지는지 확인했고, 결제 성공 경로도 함께 재검증했다. 기존 `PaymentServiceTest`/`PaymentControllerTest`는 클래스 전체가 하나의(아직 커밋 안 된) 트랜잭션으로 실행되는 구조라 `REQUIRES_NEW`가 그 데이터를 격리 원칙상 볼 수 없는 문제가 있어, `TestTransaction`으로 예약 생성 시점의 커밋과 검증 시점의 재조회를 맞춰 함께 통과시켰다(실제 운영에서는 좌석 선점과 결제가 서로 다른 HTTP 요청이라 문제 없다).
+
+</details>
+
+<details>
+<summary><strong>좌석 등급 생성 응답에 id가 없어 관리자 화면을 구현할 수 없던 문제</strong></summary>
+
+#### 문제 상황
+
+관리자 화면(콘서트 등록 → 좌석 등급 등록 → 좌석 일괄 생성 3단계 마법사)을 구현하는 중, 방금 만든 좌석 등급으로 좌석을 생성하려면 `seatGradeId`가 필요한데 좌석 등급 생성 API의 응답만으로는 그 id를 알아낼 방법이 없었다.
+
+#### 원인 분석
+
+좌석 일괄 생성(`POST /admin/concerts/{id}/seats/bulk`)은 `SeatBulkCreateRequest.seatGradeId`를 요구하지만, 좌석 등급 생성(`POST /admin/concerts/{id}/seat-grades`) 응답과 콘서트 상세 조회 응답(`ConcertDetailResponse.seatGrades`)이 공유하는 `SeatGradeResponse`에는 `gradeName`/`price`/`totalCount`만 있고 `id`가 없었다.
+
+```java
+// 수정 전
+public record SeatGradeResponse(String gradeName, BigDecimal price, Integer totalCount) {
+    public static SeatGradeResponse from(SeatGrade seatGrade) {
+        return new SeatGradeResponse(seatGrade.getGradeName(), seatGrade.getPrice(), seatGrade.getTotalCount());
+    }
+}
+```
+
+#### 해결
+
+`SeatGrade` 엔티티에는 이미 `id`가 있었으므로, `SeatGradeResponse`에 `id` 필드를 추가하고 `from()`에서 채우도록 고쳤다. 이 레코드를 포지셔널 생성자로 직접 만드는 다른 코드가 없어(전부 `SeatGradeResponse.from(...)`을 거침) 필드 추가만으로 하위 호환되게 고칠 수 있었다.
+
+```java
+// 수정 후
+public record SeatGradeResponse(Long id, String gradeName, BigDecimal price, Integer totalCount) {
+    public static SeatGradeResponse from(SeatGrade seatGrade) {
+        return new SeatGradeResponse(
+                seatGrade.getId(), seatGrade.getGradeName(), seatGrade.getPrice(), seatGrade.getTotalCount());
+    }
+}
+```
+
+#### 결과
+
+프론트엔드가 좌석 등급 생성 응답의 `id`를 그대로 좌석 일괄 생성 요청에 사용할 수 있게 됐다. 관리자 계정으로 콘서트 생성 → 좌석 등급 생성 → 그 등급으로 좌석 생성까지 3단계를 전부 실행해, 콘서트 상세 페이지에 실제로 반영되는 것까지 확인했다.
+
+</details>
