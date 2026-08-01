@@ -98,3 +98,125 @@ APP_JWT_VALIDITY_MS=3600000
 | [ci-cd.md](docs/ci-cd.md) | CI 파이프라인 설명 |
 
 Claude Code 등 AI 에이전트가 이 저장소에서 작업할 때 참고하는 가이드는 [CLAUDE.md](CLAUDE.md)에 있습니다.
+
+## 🔧 트러블슈팅
+
+개발 중 실제로 마주친 문제와 원인 분석, 해결 과정을 기록합니다. 제목을 클릭하면 상세 내용이 펼쳐집니다.
+
+<details>
+<summary><strong>좌석 동시 선점 시 SEAT_ALREADY_HELD 대신 500 에러가 발생한 문제</strong></summary>
+
+#### 문제 상황
+
+프론트엔드 데모에서 동일 좌석에 서로 다른 사용자 8명이 `redis-lock`/`pessimistic-lock` 두 엔드포인트에 동시 요청을 보내는 시나리오를 재현했다. 기대한 결과는 1명만 성공하고 나머지 7명은 `409 SEAT_ALREADY_HELD`를 받는 것이었지만, 실제로는 1명만 성공하고 나머지 대부분이 `500 INTERNAL_SERVER_ERROR`를 받았다. 두 락 전략 모두에서 동일하게 재현됐다.
+
+#### 원인 분석
+
+`ReservationFacade.holdAndBuildLine()`이 좌석 락(`SeatHoldStrategy.hold()`)을 획득하기 **전에** 가격 스냅샷을 만들기 위해 `seatRepository.findById()`로 `Seat`를 먼저 조회하고 있었다.
+
+```java
+// 수정 전
+private ReservationSeat holdAndBuildLine(SeatHoldStrategy strategy, Long seatId, Long userId,
+                                          LocalDateTime holdExpiresAt) {
+    Seat seat = seatRepository.findById(seatId)          // ← 락 획득 전, 잠금 없는 조회
+            .orElseThrow(() -> new BusinessException(ErrorCode.SEAT_NOT_FOUND));
+    SeatGrade seatGrade = seatGradeRepository.findById(seat.getSeatGradeId())
+            .orElseThrow(() -> new BusinessException(ErrorCode.SEAT_NOT_FOUND));
+
+    strategy.hold(seatId, userId, holdExpiresAt);          // ← 락은 여기서 획득
+    ...
+}
+```
+
+`spring.jpa.open-in-view=true`(OSIV) 설정 때문에 HTTP 요청 하나당 영속성 컨텍스트(1차 캐시) 하나가 요청 전체에 걸쳐 유지된다. 이 잠금 없는 선행 조회가 1차 캐시에 오래된 `Seat` 엔티티(`status=AVAILABLE`, 오래된 `version`)를 심어버렸고, 이후 `SeatHoldStrategy`가 락을 획득한 뒤 **같은 seatId로 다시** `findById`/`findByIdForUpdate`를 호출해도 Hibernate는 DB를 재조회하지 않고 캐시된 그 인스턴스를 그대로 반환했다.
+
+그 결과 패자 요청들도 `Seat.hold()`의 상태 검사(`status != AVAILABLE`)를 오래된 값 때문에 통과해버렸다. 그리고 커밋 시점에 실제 DB의 `version`과 메모리상 엔티티의 `version`이 어긋나 `ObjectOptimisticLockingFailureException`이 발생했다. 이 예외는 `BusinessException`이 아니어서 `GlobalExceptionHandler`의 범용 `Exception` 핸들러로 흘러 들어갔고, 결국 `SEAT_ALREADY_HELD` 대신 `INTERNAL_SERVER_ERROR`로 응답했다.
+
+#### 해결
+
+가격 스냅샷에 필요한 `Seat`/`SeatGrade` 조회를 `strategy.hold()` 호출 **이후**로 옮겼다. 이렇게 하면 각 전략이 락을 획득한 뒤 수행하는 조회가 해당 요청에서의 첫 조회가 되므로, 1차 캐시가 오염되지 않고 항상 락 획득 시점 기준으로 최신 상태를 읽는다.
+
+```java
+// 수정 후
+private ReservationSeat holdAndBuildLine(SeatHoldStrategy strategy, Long seatId, Long userId,
+                                          LocalDateTime holdExpiresAt) {
+    strategy.hold(seatId, userId, holdExpiresAt);          // ← 락을 먼저 획득
+
+    Seat seat = seatRepository.findById(seatId)            // ← 락 획득 후 첫 조회이므로 최신 상태
+            .orElseThrow(() -> new BusinessException(ErrorCode.SEAT_NOT_FOUND));
+    SeatGrade seatGrade = seatGradeRepository.findById(seat.getSeatGradeId())
+            .orElseThrow(() -> new BusinessException(ErrorCode.SEAT_NOT_FOUND));
+    ...
+}
+```
+
+#### 결과
+
+동일 좌석에 서로 다른 사용자 8명이 동시에 요청하는 시나리오를 다시 실행해 검증했다. 수정 전에는 1명 성공 + 다수의 500 에러였던 결과가, 수정 후에는 1명 성공 + 나머지 7명 전원 정상적인 `409 SEAT_ALREADY_HELD`로 바뀌었다. `redis-lock`/`pessimistic-lock` 두 전략 모두에서 동일하게 확인했다.
+
+</details>
+
+<details>
+<summary><strong>예외가 발생해도 로그에 아무 것도 남지 않던 문제</strong></summary>
+
+#### 문제 상황
+
+위 500 에러의 원인을 찾기 위해 `docker logs`로 백엔드 로그를 확인했지만, 에러가 다수 발생한 시간대에 로그가 완전히 비어 있었다.
+
+#### 원인 분석
+
+`GlobalExceptionHandler.handleUnexpectedException(Exception e)`이 예외 파라미터 `e`를 전혀 사용하지 않고 곧바로 `INTERNAL_SERVER_ERROR` 응답만 만들고 있었다.
+
+```java
+// 수정 전
+@ExceptionHandler(Exception.class)
+public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(Exception e) {
+    return ResponseEntity.status(ErrorCode.INTERNAL_SERVER_ERROR.getStatus())
+            .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR));
+}
+```
+
+`BusinessException`이 아닌 모든 예외가 이 핸들러로 흘러 들어가 스택트레이스 하나 남기지 않고 조용히 삼켜지고 있었다.
+
+#### 해결
+
+SLF4J `Logger`를 추가하고 예외를 잡는 즉시 스택트레이스를 남기도록 고쳤다.
+
+```java
+// 수정 후
+@ExceptionHandler(Exception.class)
+public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(Exception e) {
+    log.error("Unexpected exception", e);
+    return ResponseEntity.status(ErrorCode.INTERNAL_SERVER_ERROR.getStatus())
+            .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR));
+}
+```
+
+#### 결과
+
+이 로그 덕분에 위 `ObjectOptimisticLockingFailureException`의 정확한 발생 지점과 실패한 SQL 구문을 곧바로 확인할 수 있었다. 앞으로도 예기치 못한 예외가 발생하면 원인을 즉시 추적할 수 있다.
+
+</details>
+
+<details>
+<summary><strong>HOLD 만료 시각이 타임존 없이 내려가 클라이언트가 9시간을 오해한 문제</strong></summary>
+
+#### 문제 상황
+
+프론트엔드에서 좌석 선점 성공 후 `holdExpiresAt`(HOLD 만료 5분 카운트다운)을 표시했는데, 방금 선점에 성공했음에도 남은 시간이 항상 `0:00`으로 표시됐다.
+
+#### 원인 분석
+
+`ReservationResult.holdExpiresAt` 등 응답의 시각 필드는 `LocalDateTime`으로 직렬화된다. `LocalDateTime`은 타임존 정보를 갖지 않으므로 JSON에도 `2026-08-01T08:41:23.456`처럼 오프셋/`Z` 표기 없이 내려간다. 서버는 UTC 기준으로 값을 만들지만, 이 문자열을 받는 클라이언트(브라우저)가 UTC가 아닌 타임존(KST, UTC+9)에 있으면 표기가 없는 ISO 문자열을 **로컬 시각**으로 해석해버린다(ECMAScript 명세 동작). 그 결과 실제로는 5분 뒤인 시각이 클라이언트 계산상 9시간 전(과거)으로 취급됐다.
+
+단순 날짜 표시(포맷팅해서 다시 보여주는 경우)는 파싱과 표시가 같은 타임존을 쓰기 때문에 우연히 원래 숫자와 같게 보여 문제가 드러나지 않았다. 반면 "현재 시각과의 차이"를 계산하는 카운트다운 같은 로직에서는 오차가 그대로 드러났다.
+
+#### 해결
+
+백엔드 응답 스펙(`LocalDateTime` 기반)은 유지하고, 이를 소비하는 프론트엔드에서 타임존 표기가 없는 문자열을 UTC로 명시해 파싱하도록 헬퍼를 추가해 대응했다(표기가 없으면 `Z`를 붙여 `Date`를 생성). 백엔드 응답 자체는 API 계약을 바꾸지 않기 위해 그대로 두었다.
+
+#### 결과
+
+HOLD 카운트다운이 실제 만료 시각까지 남은 시간을 정확히 보여준다. 이 API를 새로 소비하는 클라이언트가 같은 함정에 빠지지 않도록, 시각 필드는 별도 표기가 없는 한 **UTC 기준**이라는 점을 여기 남겨둔다(추후 응답 DTO를 `Instant`/오프셋 포함 타입으로 바꾸는 것도 고려할 만하다).
+
+</details>
