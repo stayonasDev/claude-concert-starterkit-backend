@@ -14,9 +14,13 @@ services:
     volumes:
       # 데이터 영속화: 컨테이너를 내렸다 올려도 데이터가 유지된다.
       - mysql-data:/var/lib/mysql
-      # docs/database-schema.sql은 MySQL 공식 이미지의 초기화 규약(docker-entrypoint-initdb.d)에 따라
-      # 데이터 디렉터리가 비어있는 최초 기동 시 1회만 자동 실행된다 (volume이 이미 있으면 재실행되지 않음).
+      # docs/database-schema.sql, docs/dummy.sql은 MySQL 공식 이미지의 초기화 규약
+      # (docker-entrypoint-initdb.d)에 따라 데이터 디렉터리가 비어있는 최초 기동 시 파일명
+      # 알파벳 순으로 1회만 자동 실행된다 (volume이 이미 있으면 재실행되지 않음).
       - ./docs/database-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # 다른 환경에서도 바로 로그인/조회를 테스트할 수 있도록 가상 사용자 10명 + 관리자 1명,
+      # 예매 상태별 콘서트 더미 데이터를 시딩한다. 계정 정보는 docs/dummy.sql 상단 주석 참고.
+      - ./docs/dummy.sql:/docker-entrypoint-initdb.d/02-dummy.sql:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 5s

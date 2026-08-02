@@ -53,6 +53,25 @@ docker compose up -d         # MySQL(3307) + Redis(6379) + backend(8080) 전체 
 
 컨테이너 없이 호스트에서 직접 실행하려면 `docker compose up -d mysql redis`로 DB만 띄운 뒤 `./gradlew bootRun`(Windows는 `gradlew.bat bootRun`).
 
+### 더미 데이터로 바로 테스트하기
+
+MySQL 볼륨을 처음 만들 때(`docker compose up -d`) [docs/dummy.sql](docs/dummy.sql)이 [docs/database-schema.sql](docs/database-schema.sql) 바로 뒤에 자동 실행되어, 가상 사용자 10명·관리자 1명과 예매 상태별(예매중/오픈예정/마감) 콘서트 3건 + 좌석 데이터가 시딩된다.
+
+| 용도 | 이메일(ID) | 비밀번호 |
+|---|---|---|
+| 관리자 | `admin@example.com` | `Password123!` |
+| 일반 사용자 | `dummy01@example.com` ~ `dummy10@example.com` | `Password123!` |
+
+이미 기동해둔 볼륨에는 다시 실행되지 않으므로, 시드를 새로 반영하려면 `docker compose down -v`로 볼륨을 지운 뒤 `docker compose up -d`로 다시 기동한다.
+
+### 종료하기
+
+```bash
+docker compose stop           # 컨테이너만 중지 (데이터는 볼륨에 유지, 다음에 docker compose start/up으로 이어서 사용)
+docker compose down           # 컨테이너 삭제 (데이터는 볼륨에 유지)
+docker compose down -v        # 컨테이너 + 볼륨까지 삭제 (더미 데이터를 포함한 모든 DB 데이터가 사라짐)
+```
+
 ### .env 작성 가이드
 
 `.env.example`을 복사해 아래 변수 값을 채운다 (형식: `변수명=값`).
