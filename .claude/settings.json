@@ -13,5 +13,63 @@
         ]
       }
     ]
-  }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew test *)",
+      "Bash(./gradlew clean *)",
+      "Bash(./gradlew dependencies *)",
+      "Bash(./gradlew compileJava --console=plain)",
+      "Bash(./gradlew compileJava -Xlint:deprecation --console=plain)",
+      "Bash(./gradlew compileTestJava --console=plain)",
+      "Bash(./gradlew --stop)",
+      "Bash(DOCKER_API_VERSION=1.43 ./gradlew test --tests \"*RedisLockSeatHoldStrategyTest.정상적으로_AVAILABLE_좌석을_선점한다\" --console=plain)",
+      "Bash(docker compose *)",
+      "Bash(docker --version)",
+      "Bash(docker mcp *)",
+      "Bash(curl -s -m 5 -o /tmp/info.json -w \"HTTP:%{http_code}\\\\n\" http://localhost:2375/info)",
+      "Bash(curl -s -m 5 -o /tmp/info24.json -w \"HTTP:%{http_code}\\\\n\" http://localhost:2375/v1.24/info)",
+      "Bash(curl -s -m 5 -A \"docker-java/3.5.3\" -o /tmp/info_ua.json -w \"HTTP:%{http_code}\\\\n\" http://localhost:2375/info)",
+      "Bash(curl -s -o /dev/null -w \"swagger-ui.html: %{http_code}\\\\n\" http://localhost:8080/swagger-ui.html)",
+      "Bash(curl -s -o /dev/null -w \"http_code=%{http_code}\\\\n\" http://localhost:8080/v3/api-docs)",
+      "Bash(curl -s http://localhost:8080/v3/api-docs)",
+      "Bash(curl -s http://localhost:8080/v3/api-docs -o /tmp/openapi.json)",
+      "Bash(curl --version)",
+      "Bash(git add *)",
+      "Bash(git status *)",
+      "Bash(git commit *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git check-ignore *)",
+      "Bash(bash -c ' *)",
+      "Bash(bash -n .claude/hooks/slack-notify.sh)",
+      "Bash(bash .claude/hooks/slack-notify.sh)",
+      "Bash(SLACK_WEBHOOK_URL=https://example.com/dummy bash -c ' *)",
+      "Bash(SLACK_WEBHOOK_URL=\"https://httpbin.org/post\" bash -x .claude/hooks/slack-notify.sh)",
+      "Bash(SLACK_WEBHOOK_URL=x bash -c ' *)",
+      "Bash(python3 *)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(list\\(d.get\\('paths',{}\\).keys\\(\\)\\)\\)\")",
+      "Bash(python3 -c \"import tempfile; print\\(tempfile.gettempdir\\(\\)\\)\")",
+      "Bash(javap -v org/springframework/http/HttpStatus.class)",
+      "Bash(xargs grep -l \"DockerClientProviderStrategy\\\\|ClassNotFoundException\")",
+      "Bash(jq --version)",
+      "Bash(npx --version)",
+      "Bash(uvx --version)",
+      "Bash(uv --version)",
+      "Bash(mktemp)",
+      "Bash(echo \"exit code: $?\")",
+      "Bash(echo \"exit: $?\")",
+      "Read(//tmp/**)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "Skill(update-config)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "mysql",
+    "docker-mcp",
+    "github"
+  ]
 }
