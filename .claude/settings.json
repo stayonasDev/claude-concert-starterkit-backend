@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "bash .claude/hooks/slack-notify.sh",
+            "timeout": 15,
+            "statusMessage": "Slack 알림 전송 중..."
+          }
+        ]
+      }
+    ]
+  }
+}
